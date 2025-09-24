@@ -50,7 +50,7 @@ router.post('/chat', validateChatRequest, async (req, res) => {
        message, 
        model = process.env.OPENAI_MODEL || 'gpt-3.5-turbo',
        temperature = 1,
-       max_completion_tokens = 4000
+       max_completion_tokens = 16000
      } = req.body;
 
     console.log(`📝 Nuevo mensaje recibido: ${message.substring(0, 100)}...`);
