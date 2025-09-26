@@ -7,6 +7,52 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
+// Almacenar threads de conversación (conversationId -> threadId)
+const gameThreads = new Map();
+
+// ID del Assistant de Zork desde .env
+const ZORK_ASSISTANT_ID = process.env.ZORK_ASSISTANT_ID;
+
+if (!ZORK_ASSISTANT_ID) {
+  console.error('❌ ZORK_ASSISTANT_ID no está configurado en el archivo .env');
+  process.exit(1);
+}
+
+// Función para obtener o crear thread de conversación
+const getOrCreateThread = async (conversationId) => {
+  if (!gameThreads.has(conversationId)) {
+    try {
+      const thread = await openai.beta.threads.create();
+      gameThreads.set(conversationId, {
+        threadId: thread.id,
+        createdAt: new Date()
+      });
+      console.log(`✅ Nuevo thread creado: ${thread.id} para conversación: ${conversationId}`);
+    } catch (error) {
+      console.error('❌ Error creando thread:', error);
+      throw error;
+    }
+  }
+  return gameThreads.get(conversationId);
+};
+
+// Función para detectar si el jugador quiere crear un nuevo juego
+const isNewGameRequest = (message) => {
+  const newGameKeywords = [
+    'crear nuevo juego',
+    'nueva partida',
+    'empezar de nuevo',
+    'reiniciar juego',
+    'nuevo juego',
+    'comenzar aventura',
+    'start game',
+    'new game'
+  ];
+  
+  const lowerMessage = message.toLowerCase();
+  return newGameKeywords.some(keyword => lowerMessage.includes(keyword));
+};
+
 // Validación de entrada
 const validateChatRequest = (req, res, next) => {
   const { message, model, temperature, max_tokens } = req.body;
@@ -43,47 +89,69 @@ const validateChatRequest = (req, res, next) => {
   next();
 };
 
-// Endpoint para chat
+// Endpoint para chat con el Assistant de Zork
 router.post('/chat', validateChatRequest, async (req, res) => {
   try {
      const { 
        message, 
-       model = process.env.OPENAI_MODEL || 'gpt-3.5-turbo',
-       temperature = 1,
-       max_completion_tokens = 16000
+       conversationId = 'default' // ID de conversación para mantener contexto
      } = req.body;
 
     console.log(`📝 Nuevo mensaje recibido: ${message.substring(0, 100)}...`);
 
-    const completion = await openai.chat.completions.create({
-      model: model,
-      messages: [
-        {
-          role: 'user',
-          content: message
-        }
-      ],
-      temperature: temperature,
-      max_completion_tokens: max_completion_tokens,
+    // Verificar si el jugador quiere crear un nuevo juego
+    if (isNewGameRequest(message)) {
+      console.log(`🎮 Creando nueva partida para conversación: ${conversationId}`);
+      // Eliminar thread existente y crear uno nuevo
+      if (gameThreads.has(conversationId)) {
+        gameThreads.delete(conversationId);
+      }
+    }
+
+    // Obtener o crear thread de conversación
+    const gameThread = await getOrCreateThread(conversationId);
+    
+    // Agregar mensaje al thread
+    await openai.beta.threads.messages.create(gameThread.threadId, {
+      role: 'user',
+      content: message
     });
 
-    const response = completion.choices[0]?.message?.content;
+    // Ejecutar el Assistant
+    const run = await openai.beta.threads.runs.create(gameThread.threadId, {
+      assistant_id: ZORK_ASSISTANT_ID
+    });
 
-    console.log(completion.choices[0]);
+    // Esperar a que termine la ejecución
+    let runStatus = await openai.beta.threads.runs.retrieve(gameThread.threadId, run.id);
+    while (runStatus.status !== 'completed') {
+      if (runStatus.status === 'failed') {
+        throw new Error(`Run failed: ${runStatus.last_error?.message}`);
+      }
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      runStatus = await openai.beta.threads.runs.retrieve(gameThread.threadId, run.id);
+    }
+
+    // Obtener la respuesta
+    const messages = await openai.beta.threads.messages.list(gameThread.threadId);
+    const response = messages.data[0].content[0].text.value;
+
     console.log(`🔍 Respuesta recibida: ${response}`);
 
     if (!response) {
-      throw new Error('No se recibió respuesta de OpenAI');
+      throw new Error('No se recibió respuesta del Assistant');
     }
+
+    // response.message = JSON.parse(response.message);
 
     console.log(`✅ Respuesta generada exitosamente`);
 
     res.json({
       success: true,
       data: {
-        message: response,
-        model: model,
-        usage: completion.usage,
+        message: JSON.parse(response),
+        conversationId: conversationId,
+        threadId: gameThread.threadId,
         timestamp: new Date().toISOString()
       }
     });
@@ -155,14 +223,163 @@ router.get('/models', async (req, res) => {
 // Endpoint para verificar configuración
 router.get('/status', (req, res) => {
   const hasApiKey = !!process.env.OPENAI_API_KEY;
-  const model = process.env.OPENAI_MODEL || 'gpt-3.5-turbo';
+  const hasAssistantId = !!process.env.ZORK_ASSISTANT_ID;
   
   res.json({
     success: true,
     data: {
-      configured: hasApiKey,
-      model: model,
+      configured: hasApiKey && hasAssistantId,
+      hasApiKey: hasApiKey,
+      hasAssistantId: hasAssistantId,
+      assistantId: ZORK_ASSISTANT_ID,
       environment: process.env.NODE_ENV || 'development',
+      activeConversations: gameThreads.size,
+      timestamp: new Date().toISOString()
+    }
+  });
+});
+
+// Endpoint para obtener contexto de una conversación
+router.get('/context/:conversationId', async (req, res) => {
+  try {
+    const { conversationId } = req.params;
+    const gameThread = gameThreads.get(conversationId);
+    
+    if (!gameThread) {
+      return res.status(404).json({
+        success: false,
+        error: 'Conversación no encontrada',
+        message: `No existe una conversación con ID: ${conversationId}`
+      });
+    }
+
+    // Obtener mensajes del thread
+    const messages = await openai.beta.threads.messages.list(gameThread.threadId);
+    const messageCount = messages.data.length;
+    const lastMessage = messageCount > 0 ? {
+      role: messages.data[0].role,
+      content: messages.data[0].content[0].text.value,
+      timestamp: new Date(messages.data[0].created_at * 1000)
+    } : null;
+    
+    res.json({
+      success: true,
+      data: {
+        conversationId: conversationId,
+        threadId: gameThread.threadId,
+        messageCount: messageCount,
+        createdAt: gameThread.createdAt,
+        lastMessage: lastMessage,
+        timestamp: new Date().toISOString()
+      }
+    });
+  } catch (error) {
+    console.error('❌ Error obteniendo contexto:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Error obteniendo contexto',
+      message: error.message
+    });
+  }
+});
+
+// Endpoint para limpiar contexto de una conversación (DESHABILITADO)
+router.delete('/context/:conversationId', (req, res) => {
+  res.status(403).json({
+    success: false,
+    error: 'Funcionalidad deshabilitada',
+    message: 'No se pueden eliminar conversaciones. Solo se permite crear y continuar historias.'
+  });
+});
+
+// Endpoint para obtener historial completo de una partida
+router.get('/history/:conversationId', async (req, res) => {
+  try {
+    const { conversationId } = req.params;
+    const gameThread = gameThreads.get(conversationId);
+    
+    if (!gameThread) {
+      return res.status(404).json({
+        success: false,
+        error: 'Conversación no encontrada',
+        message: `No existe una conversación con ID: ${conversationId}`
+      });
+    }
+
+    // Obtener todos los mensajes del thread
+    const messages = await openai.beta.threads.messages.list(gameThread.threadId);
+    
+    // Procesar mensajes en orden cronológico (más antiguos primero)
+    const sortedMessages = messages.data.sort((a, b) => a.created_at - b.created_at);
+    
+    // Formatear historial
+    const history = [];
+    let currentExchange = {};
+    
+    for (const message of sortedMessages) {
+      const content = message.content[0].text.value;
+      const timestamp = new Date(message.created_at * 1000);
+      
+      if (message.role === 'user') {
+        // Si ya hay un exchange en progreso, guardarlo
+        if (currentExchange.user) {
+          history.push(currentExchange);
+        }
+        // Iniciar nuevo exchange
+        currentExchange = {
+          user: content,
+          timestamp: timestamp
+        };
+      } else if (message.role === 'assistant') {
+        // Completar el exchange actual
+        currentExchange.zorkMaster = content;
+        if (currentExchange.user) {
+          history.push(currentExchange);
+        }
+        currentExchange = {};
+      }
+    }
+    
+    // Si queda un exchange sin completar, agregarlo
+    if (currentExchange.user) {
+      history.push(currentExchange);
+    }
+    
+    res.json({
+      success: true,
+      data: {
+        conversationId: conversationId,
+        threadId: gameThread.threadId,
+        totalExchanges: history.length,
+        createdAt: gameThread.createdAt,
+        history: history,
+        timestamp: new Date().toISOString()
+      }
+    });
+  } catch (error) {
+    console.error('❌ Error obteniendo historial:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Error obteniendo historial',
+      message: error.message
+    });
+  }
+});
+
+// Endpoint para listar todas las conversaciones activas
+router.get('/conversations', (req, res) => {
+  const conversationList = Array.from(gameThreads.entries()).map(([id, gameThread]) => ({
+    conversationId: id,
+    threadId: gameThread.threadId,
+    createdAt: gameThread.createdAt
+  }));
+  
+  res.json({
+    success: true,
+    data: {
+      conversations: conversationList,
+      total: conversationList.length,
+      assistantId: ZORK_ASSISTANT_ID,
       timestamp: new Date().toISOString()
     }
   });

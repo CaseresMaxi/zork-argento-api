@@ -144,8 +144,9 @@ GET /api/status
 | Variable | Descripción | Valor por Defecto |
 |----------|-------------|-------------------|
 | `OPENAI_API_KEY` | Tu API key de OpenAI | Requerido |
+| `ZORK_ASSISTANT_ID` | ID del Assistant de Zork | Requerido |
 | `OPENAI_MODEL` | Modelo a usar | `gpt-3.5-turbo` |
-| `PORT` | Puerto del servidor | `3000` |
+| `PORT` | Puerto del servidor | `3001` |
 | `NODE_ENV` | Entorno de ejecución | `development` |
 | `RATE_LIMIT_WINDOW_MS` | Ventana de rate limiting | `900000` (15 min) |
 | `RATE_LIMIT_MAX_REQUESTS` | Máximo de requests por ventana | `100` |
