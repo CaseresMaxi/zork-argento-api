@@ -5,6 +5,7 @@ const rateLimit = require('express-rate-limit');
 require('dotenv').config();
 
 const openaiRoutes = require('./routes/openai');
+const db = require('./database-mysql');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -82,12 +83,32 @@ app.use((err, req, res, next) => {
   });
 });
 
-// Start server
-app.listen(PORT, () => {
-  console.log(`🚀 Servidor iniciado en puerto ${PORT}`);
-  console.log(`📡 Health check: http://localhost:${PORT}/health`);
-  console.log(`💬 Chat endpoint: http://localhost:${PORT}/api/chat`);
-  console.log(`🤖 Models endpoint: http://localhost:${PORT}/api/models`);
+// Inicializar base de datos y start server
+async function startServer() {
+  try {
+    // Inicializar base de datos
+    await db.initDatabase();
+    
+    // Iniciar servidor
+    app.listen(PORT, () => {
+      console.log(`🚀 Servidor iniciado en puerto ${PORT}`);
+      console.log(`📡 Health check: http://localhost:${PORT}/health`);
+      console.log(`💬 Chat endpoint: http://localhost:${PORT}/api/chat`);
+      console.log(`🤖 Models endpoint: http://localhost:${PORT}/api/models`);
+    });
+  } catch (error) {
+    console.error('❌ Error iniciando servidor:', error);
+    process.exit(1);
+  }
+}
+
+// Manejar cierre graceful
+process.on('SIGINT', async () => {
+  console.log('\n🛑 Cerrando servidor...');
+  await db.closeDatabase();
+  process.exit(0);
 });
+
+startServer();
 
 module.exports = app;

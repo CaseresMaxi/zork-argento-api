@@ -1,13 +1,14 @@
 const express = require('express');
 const OpenAI = require('openai');
 const router = express.Router();
+const db = require('../database-mysql');
 
 // Inicializar cliente de OpenAI
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
-// Almacenar threads de conversación (conversationId -> threadId)
+// Cache en memoria para threads activos (conversationId -> threadId)
 const gameThreads = new Map();
 
 // ID del Assistant de Zork desde .env
@@ -20,20 +21,45 @@ if (!ZORK_ASSISTANT_ID) {
 
 // Función para obtener o crear thread de conversación
 const getOrCreateThread = async (conversationId) => {
-  if (!gameThreads.has(conversationId)) {
-    try {
+  // Primero verificar en cache
+  if (gameThreads.has(conversationId)) {
+    return gameThreads.get(conversationId);
+  }
+
+  // Si no está en cache, buscar en base de datos
+  try {
+    const dbConversation = await db.getConversation(conversationId);
+    
+    if (dbConversation) {
+      // Thread existe en BD, cargar en cache
+      const threadData = {
+        threadId: dbConversation.thread_id,
+        createdAt: new Date(dbConversation.created_at)
+      };
+      gameThreads.set(conversationId, threadData);
+      console.log(`✅ Thread cargado desde BD: ${dbConversation.thread_id} para conversación: ${conversationId}`);
+      return threadData;
+    } else {
+      // Thread no existe, crear nuevo
       const thread = await openai.beta.threads.create();
-      gameThreads.set(conversationId, {
+      const threadData = {
         threadId: thread.id,
         createdAt: new Date()
-      });
+      };
+      
+      // Guardar en cache
+      gameThreads.set(conversationId, threadData);
+      
+      // Guardar en base de datos
+      await db.saveConversation(conversationId, thread.id);
+      
       console.log(`✅ Nuevo thread creado: ${thread.id} para conversación: ${conversationId}`);
-    } catch (error) {
-      console.error('❌ Error creando thread:', error);
-      throw error;
+      return threadData;
     }
+  } catch (error) {
+    console.error('❌ Error obteniendo/creando thread:', error);
+    throw error;
   }
-  return gameThreads.get(conversationId);
 };
 
 // Función para detectar si el jugador quiere crear un nuevo juego
@@ -102,9 +128,15 @@ router.post('/chat', validateChatRequest, async (req, res) => {
     // Verificar si el jugador quiere crear un nuevo juego
     if (isNewGameRequest(message)) {
       console.log(`🎮 Creando nueva partida para conversación: ${conversationId}`);
-      // Eliminar thread existente y crear uno nuevo
+      // Eliminar thread existente de cache y BD
       if (gameThreads.has(conversationId)) {
         gameThreads.delete(conversationId);
+      }
+      // Eliminar de base de datos también
+      try {
+        await db.deleteConversation(conversationId);
+      } catch (error) {
+        console.error('❌ Error eliminando conversación de BD:', error);
       }
     }
 
@@ -243,9 +275,11 @@ router.get('/status', (req, res) => {
 router.get('/context/:conversationId', async (req, res) => {
   try {
     const { conversationId } = req.params;
-    const gameThread = gameThreads.get(conversationId);
     
-    if (!gameThread) {
+    // Buscar en base de datos primero
+    const dbConversation = await db.getConversation(conversationId);
+    
+    if (!dbConversation) {
       return res.status(404).json({
         success: false,
         error: 'Conversación no encontrada',
@@ -254,7 +288,7 @@ router.get('/context/:conversationId', async (req, res) => {
     }
 
     // Obtener mensajes del thread
-    const messages = await openai.beta.threads.messages.list(gameThread.threadId);
+    const messages = await openai.beta.threads.messages.list(dbConversation.thread_id);
     const messageCount = messages.data.length;
     const lastMessage = messageCount > 0 ? {
       role: messages.data[0].role,
@@ -266,9 +300,10 @@ router.get('/context/:conversationId', async (req, res) => {
       success: true,
       data: {
         conversationId: conversationId,
-        threadId: gameThread.threadId,
+        threadId: dbConversation.thread_id,
         messageCount: messageCount,
-        createdAt: gameThread.createdAt,
+        createdAt: dbConversation.created_at,
+        updatedAt: dbConversation.updated_at,
         lastMessage: lastMessage,
         timestamp: new Date().toISOString()
       }
@@ -296,9 +331,11 @@ router.delete('/context/:conversationId', (req, res) => {
 router.get('/history/:conversationId', async (req, res) => {
   try {
     const { conversationId } = req.params;
-    const gameThread = gameThreads.get(conversationId);
     
-    if (!gameThread) {
+    // Buscar en base de datos primero
+    const dbConversation = await db.getConversation(conversationId);
+    
+    if (!dbConversation) {
       return res.status(404).json({
         success: false,
         error: 'Conversación no encontrada',
@@ -307,7 +344,7 @@ router.get('/history/:conversationId', async (req, res) => {
     }
 
     // Obtener todos los mensajes del thread
-    const messages = await openai.beta.threads.messages.list(gameThread.threadId);
+    const messages = await openai.beta.threads.messages.list(dbConversation.thread_id);
     
     // Procesar mensajes en orden cronológico (más antiguos primero)
     const sortedMessages = messages.data.sort((a, b) => a.created_at - b.created_at);
@@ -349,9 +386,10 @@ router.get('/history/:conversationId', async (req, res) => {
       success: true,
       data: {
         conversationId: conversationId,
-        threadId: gameThread.threadId,
+        threadId: dbConversation.thread_id,
         totalExchanges: history.length,
-        createdAt: gameThread.createdAt,
+        createdAt: dbConversation.created_at,
+        updatedAt: dbConversation.updated_at,
         history: history,
         timestamp: new Date().toISOString()
       }
@@ -367,22 +405,34 @@ router.get('/history/:conversationId', async (req, res) => {
 });
 
 // Endpoint para listar todas las conversaciones activas
-router.get('/conversations', (req, res) => {
-  const conversationList = Array.from(gameThreads.entries()).map(([id, gameThread]) => ({
-    conversationId: id,
-    threadId: gameThread.threadId,
-    createdAt: gameThread.createdAt
-  }));
-  
-  res.json({
-    success: true,
-    data: {
-      conversations: conversationList,
-      total: conversationList.length,
-      assistantId: ZORK_ASSISTANT_ID,
-      timestamp: new Date().toISOString()
-    }
-  });
+router.get('/conversations', async (req, res) => {
+  try {
+    const dbConversations = await db.getAllConversations();
+    
+    const conversationList = dbConversations.map(conv => ({
+      conversationId: conv.conversation_id,
+      threadId: conv.thread_id,
+      createdAt: conv.created_at,
+      updatedAt: conv.updated_at
+    }));
+    
+    res.json({
+      success: true,
+      data: {
+        conversations: conversationList,
+        total: conversationList.length,
+        assistantId: ZORK_ASSISTANT_ID,
+        timestamp: new Date().toISOString()
+      }
+    });
+  } catch (error) {
+    console.error('❌ Error obteniendo conversaciones:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Error obteniendo conversaciones',
+      message: error.message
+    });
+  }
 });
 
 module.exports = router;
