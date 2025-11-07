@@ -10,14 +10,65 @@ const db = require('./database-mysql');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Security middleware
-app.use(helmet());
+// Security middleware - Configurar Helmet para permitir CORS
+app.use(helmet({
+  crossOriginResourcePolicy: { policy: "cross-origin" },
+  crossOriginEmbedderPolicy: false
+}));
 
-// CORS configuration
+// CORS configuration - Permitir localhost y dominio de producción
+const allowedOrigins = process.env.ALLOWED_ORIGINS 
+  ? process.env.ALLOWED_ORIGINS.split(',')
+  : [
+      'http://localhost:3000',
+      'http://localhost:3001',
+      'http://localhost:5173',
+      'http://localhost:5174',
+      'http://localhost:8080',
+      'http://127.0.0.1:3000',
+      'http://127.0.0.1:3001',
+      'http://127.0.0.1:5173',
+      'http://127.0.0.1:8080'
+    ];
+
+// Agregar dominio de producción si está configurado
+if (process.env.FRONTEND_URL) {
+  allowedOrigins.push(process.env.FRONTEND_URL);
+}
+
 app.use(cors({
-  origin: '*', // Permitir todas las origins para endpoints públicos
-  methods: ['GET', 'POST', 'PUT', 'DELETE'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  origin: function (origin, callback) {
+    // Permitir requests sin origin (Postman, curl, etc.)
+    if (!origin) return callback(null, true);
+    
+    // Permitir si está en la lista de orígenes permitidos
+    if (allowedOrigins.indexOf(origin) !== -1 || process.env.NODE_ENV === 'development') {
+      callback(null, true);
+    } else {
+      // En producción, verificar si el origen está permitido
+      if (process.env.NODE_ENV === 'production') {
+        // Si no está en la lista, rechazar
+        callback(new Error('No permitido por CORS'));
+      } else {
+        // En desarrollo, permitir todo
+        callback(null, true);
+      }
+    }
+  },
+  credentials: true, // Permitir cookies y headers de autenticación
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: [
+    'Content-Type',
+    'Authorization',
+    'X-Requested-With',
+    'Accept',
+    'Origin',
+    'Access-Control-Request-Method',
+    'Access-Control-Request-Headers'
+  ],
+  exposedHeaders: ['Content-Range', 'X-Content-Range'],
+  preflightContinue: false,
+  optionsSuccessStatus: 204
 }));
 
 // Rate limiting
@@ -43,6 +94,16 @@ app.get('/health', (req, res) => {
     message: 'API funcionando correctamente',
     timestamp: new Date().toISOString(),
     version: '1.0.0'
+  });
+});
+
+// CORS test endpoint
+app.get('/cors-test', (req, res) => {
+  res.status(200).json({
+    success: true,
+    message: 'CORS está funcionando correctamente',
+    origin: req.headers.origin || 'No origin header',
+    timestamp: new Date().toISOString()
   });
 });
 
