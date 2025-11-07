@@ -10,13 +10,9 @@ const db = require('./database-mysql');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Security middleware - Configurar Helmet para permitir CORS
-app.use(helmet({
-  crossOriginResourcePolicy: { policy: "cross-origin" },
-  crossOriginEmbedderPolicy: false
-}));
-
-// CORS configuration - Permitir localhost y dominio de producción
+// ---------------------
+// 🔹 CORS configuration
+// ---------------------
 const allowedOrigins = process.env.ALLOWED_ORIGINS 
   ? process.env.ALLOWED_ORIGINS.split(',')
   : [
@@ -24,51 +20,31 @@ const allowedOrigins = process.env.ALLOWED_ORIGINS
       'http://localhost:3001',
       'http://localhost:5173',
       'http://localhost:5174',
-      'http://localhost:8080',
       'http://127.0.0.1:3000',
-      'http://127.0.0.1:3001',
-      'http://127.0.0.1:5173',
-      'http://127.0.0.1:8080'
+      'http://127.0.0.1:5173'
     ];
-
-// Agregar dominio de producción si está configurado
-if (process.env.FRONTEND_URL) {
-  allowedOrigins.push(process.env.FRONTEND_URL);
-}
 
 app.use(cors({
   origin: function (origin, callback) {
-    // Permitir requests sin origin (Postman, curl, etc.)
     if (!origin) return callback(null, true);
-    
-    // Permitir si está en la lista de orígenes permitidos
-    if (allowedOrigins.indexOf(origin) !== -1 || process.env.NODE_ENV === 'development') {
-      callback(null, true);
-    } else {
-      // En producción, verificar si el origen está permitido
-      if (process.env.NODE_ENV === 'production') {
-        // Si no está en la lista, rechazar
-        callback(new Error('No permitido por CORS'));
-      } else {
-        // En desarrollo, permitir todo
-        callback(null, true);
-      }
+    if (allowedOrigins.includes(origin)) {
+      return callback(null, true);
     }
+    console.warn('❌ Bloqueado por CORS:', origin);
+    return callback(new Error('No permitido por CORS'));
   },
-  credentials: true, // Permitir cookies y headers de autenticación
+  credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: [
-    'Content-Type',
-    'Authorization',
-    'X-Requested-With',
-    'Accept',
-    'Origin',
-    'Access-Control-Request-Method',
-    'Access-Control-Request-Headers'
-  ],
-  exposedHeaders: ['Content-Range', 'X-Content-Range'],
-  preflightContinue: false,
-  optionsSuccessStatus: 204
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
+
+// 🔸 ESTA LÍNEA AGREGA LA RESPUESTA PARA TODAS LAS PETICIONES OPTIONS
+app.options('*', cors());
+
+// ✅ Helmet después de CORS
+app.use(helmet({
+  crossOriginResourcePolicy: false,
+  crossOriginEmbedderPolicy: false
 }));
 
 // Rate limiting
