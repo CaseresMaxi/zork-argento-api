@@ -7,7 +7,6 @@ Una API REST en Node.js para conectarse con OpenAI, similar a ChatGPT. Permite e
 - **Endpoints públicos** para fácil integración
 - **Integración completa con OpenAI** (GPT-3.5-turbo, GPT-4, etc.)
 - **Rate limiting** para prevenir abuso
-- **CORS habilitado** para uso desde frontend
 - **Validación de entrada** robusta
 - **Manejo de errores** detallado
 - **Logging** para monitoreo
@@ -164,7 +163,6 @@ GET /api/status
 
 - **Rate Limiting**: 100 requests por 15 minutos por IP
 - **Helmet**: Headers de seguridad
-- **CORS**: Configurado para permitir todas las origins
 - **Validación**: Validación robusta de entrada
 - **Error Handling**: Manejo seguro de errores
 

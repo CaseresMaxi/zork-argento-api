@@ -1,5 +1,4 @@
 const express = require('express');
-const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 require('dotenv').config();
@@ -10,42 +9,8 @@ const db = require('./database-mysql');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// ---------------------
-// 🔹 CORS configuration
-// ---------------------
-const allowedOrigins = process.env.ALLOWED_ORIGINS 
-  ? process.env.ALLOWED_ORIGINS.split(',')
-  : [
-      'http://localhost:3000',
-      'http://localhost:3001',
-      'http://localhost:5173',
-      'http://localhost:5174',
-      'http://127.0.0.1:3000',
-      'http://127.0.0.1:5173'
-    ];
-
-app.use(cors({
-  origin: function (origin, callback) {
-    if (!origin) return callback(null, true);
-    if (allowedOrigins.includes(origin)) {
-      return callback(null, true);
-    }
-    console.warn('❌ Bloqueado por CORS:', origin);
-    return callback(new Error('No permitido por CORS'));
-  },
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
-}));
-
-// 🔸 ESTA LÍNEA AGREGA LA RESPUESTA PARA TODAS LAS PETICIONES OPTIONS
-app.options('*', cors());
-
-// ✅ Helmet después de CORS
-app.use(helmet({
-  crossOriginResourcePolicy: false,
-  crossOriginEmbedderPolicy: false
-}));
+// Helmet configuration
+app.use(helmet());
 
 // Rate limiting
 const limiter = rateLimit({
@@ -70,16 +35,6 @@ app.get('/health', (req, res) => {
     message: 'API funcionando correctamente',
     timestamp: new Date().toISOString(),
     version: '1.0.0'
-  });
-});
-
-// CORS test endpoint
-app.get('/cors-test', (req, res) => {
-  res.status(200).json({
-    success: true,
-    message: 'CORS está funcionando correctamente',
-    origin: req.headers.origin || 'No origin header',
-    timestamp: new Date().toISOString()
   });
 });
 
