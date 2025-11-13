@@ -13,7 +13,7 @@ const cors = require('cors');
 app.use(cors({
   origin: '*', // o podés restringir a tu dominio React, ej: 'http://localhost:5173'
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-api-key']
 }));
 
 // Helmet configuration
