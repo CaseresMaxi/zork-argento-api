@@ -8,6 +8,13 @@ const db = require('./database-mysql');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const cors = require('cors');
+
+app.use(cors({
+  origin: '*', // o podés restringir a tu dominio React, ej: 'http://localhost:5173'
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
 
 // Helmet configuration
 app.use(helmet());
